@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import { Check, Star, Crown, Zap, Shield, Download } from 'lucide-react';
+import { Check, Star, Crown, Zap, Shield, Download, Sparkles } from 'lucide-react';
 import appLogo from '@/assets/app-logo.png';
 
 interface Product {
@@ -51,6 +52,14 @@ const Paywall = () => {
     productId: null,
   });
   const [restoring, setRestoring] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+
+  // Analytics tracking
+  const trackEvent = (eventName: string, properties?: Record<string, any>) => {
+    console.log(`Analytics: ${eventName}`, properties);
+    // In production, integrate with your analytics service:
+    // analytics.track(eventName, properties);
+  };
 
   const features = [
     { icon: <Zap className="w-5 h-5" />, text: 'Ad-free experience' },
@@ -59,20 +68,51 @@ const Paywall = () => {
     { icon: <Download className="w-5 h-5" />, text: 'Offline access' },
   ];
 
-  // Simulate RevenueCat REST API call to fetch offerings
+  // RevenueCat REST API call to fetch offerings
   useEffect(() => {
     const fetchOfferings = async () => {
+      trackEvent('paywall_viewed');
+      
       try {
-        // In a real implementation, this would be a call to RevenueCat REST API
-        // GET https://api.revenuecat.com/v1/subscribers/{app_user_id}/offerings
-        console.log('Fetching offerings from RevenueCat...');
+        // Replace with your actual RevenueCat API key and app user ID
+        const appUserId = 'anonymous_user_' + Date.now();
+        const apiKey = 'rc_test_YOUR_API_KEY_HERE'; // Replace with actual key
         
-        // Simulate API response delay
-        setTimeout(() => {
-          console.log('Offerings loaded successfully');
-        }, 1000);
+        const response = await fetch(`https://api.revenuecat.com/v1/subscribers/${appUserId}/offerings`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`API Error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        
+        // Update products with actual pricing from RevenueCat
+        if (data.current_offering_id && data.offerings[data.current_offering_id]) {
+          const offering = data.offerings[data.current_offering_id];
+          const updatedProducts = products.map(product => {
+            const rcPackage = offering.packages.find((pkg: any) => pkg.identifier === product.id);
+            if (rcPackage) {
+              return {
+                ...product,
+                price: rcPackage.product.price_string || product.price,
+              };
+            }
+            return product;
+          });
+          setProducts(updatedProducts);
+        }
+        
+        trackEvent('offerings_loaded_success');
+        console.log('Offerings loaded successfully');
       } catch (error) {
         console.error('Failed to fetch offerings:', error);
+        trackEvent('offerings_load_failed', { error: error.message });
         toast({
           title: 'Error',
           description: 'Failed to load subscription options',
@@ -86,32 +126,44 @@ const Paywall = () => {
 
   const handlePurchase = async (productId: string) => {
     setPurchaseState({ loading: true, productId });
+    trackEvent('purchase_attempted', { product_id: productId });
     
     try {
-      // Simulate RevenueCat REST API purchase
-      // POST https://api.revenuecat.com/v1/receipts
-      console.log(`Initiating purchase for product: ${productId}`);
+      const appUserId = 'anonymous_user_' + Date.now();
+      const apiKey = 'rc_test_YOUR_API_KEY_HERE'; // Replace with actual key
       
-      // Simulate purchase delay
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // RevenueCat REST API purchase - POST receipt validation
+      const response = await fetch('https://api.revenuecat.com/v1/receipts', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          app_user_id: appUserId,
+          fetch_token: 'your_receipt_token_here', // From your payment provider
+          product_id: productId,
+          price: products.find(p => p.id === productId)?.price.replace('$', ''),
+          currency: 'USD',
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Purchase API Error: ${response.status}`);
+      }
+
+      const data = await response.json();
       
-      // Simulate successful purchase
-      const success = Math.random() > 0.2; // 80% success rate
-      
-      if (success) {
-        toast({
-          title: 'Purchase Successful!',
-          description: 'Welcome to Premium! Enjoy all the benefits.',
-          variant: 'default',
-        });
-        
-        // In real app, this would redirect or update app state
+      if (data.subscriber?.entitlements?.premium?.is_active) {
+        trackEvent('purchase_success', { product_id: productId });
+        setShowSuccessModal(true);
         console.log('Purchase completed successfully');
       } else {
-        throw new Error('Payment failed');
+        throw new Error('Subscription not activated');
       }
     } catch (error) {
       console.error('Purchase failed:', error);
+      trackEvent('purchase_failed', { product_id: productId, error: error.message });
       toast({
         title: 'Purchase Failed',
         description: 'Something went wrong. Please try again.',
@@ -124,24 +176,32 @@ const Paywall = () => {
 
   const handleRestore = async () => {
     setRestoring(true);
+    trackEvent('restore_attempted');
     
     try {
-      // Simulate RevenueCat REST API restore
-      // GET https://api.revenuecat.com/v1/subscribers/{app_user_id}
-      console.log('Restoring purchases...');
+      const appUserId = 'anonymous_user_' + Date.now();
+      const apiKey = 'rc_test_YOUR_API_KEY_HERE'; // Replace with actual key
       
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // RevenueCat REST API restore - GET subscriber info
+      const response = await fetch(`https://api.revenuecat.com/v1/subscribers/${appUserId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Restore API Error: ${response.status}`);
+      }
+
+      const data = await response.json();
       
-      // Simulate restoration result
-      const hasActiveSubscription = Math.random() > 0.7; // 30% have active subscription
-      
-      if (hasActiveSubscription) {
-        toast({
-          title: 'Purchases Restored!',
-          description: 'Your Premium subscription is now active.',
-          variant: 'default',
-        });
+      if (data.subscriber?.entitlements?.premium?.is_active) {
+        trackEvent('restore_success');
+        setShowSuccessModal(true);
       } else {
+        trackEvent('restore_no_subscription');
         toast({
           title: 'No Active Subscription',
           description: 'No active subscription found.',
@@ -150,6 +210,7 @@ const Paywall = () => {
       }
     } catch (error) {
       console.error('Restore failed:', error);
+      trackEvent('restore_failed', { error: error.message });
       toast({
         title: 'Restore Failed',
         description: 'Unable to restore purchases. Please try again.',
@@ -287,6 +348,44 @@ const Paywall = () => {
           </button>
         </div>
       </div>
+
+      {/* Success Modal */}
+      <Dialog open={showSuccessModal} onOpenChange={setShowSuccessModal}>
+        <DialogContent className="max-w-sm mx-auto text-center">
+          <DialogHeader>
+            <div className="mx-auto w-16 h-16 bg-success/10 rounded-full flex items-center justify-center mb-4">
+              <Sparkles className="w-8 h-8 text-success" />
+            </div>
+            <DialogTitle className="text-xl font-bold">
+              🎉 Welcome to Premium!
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-muted-foreground">
+              Your subscription is now active. Enjoy all the premium features!
+            </p>
+            <div className="space-y-2">
+              {features.map((feature, index) => (
+                <div key={index} className="flex items-center gap-2 text-sm">
+                  <Check className="w-4 h-4 text-success" />
+                  <span>{feature.text}</span>
+                </div>
+              ))}
+            </div>
+            <Button 
+              variant="premium" 
+              size="lg" 
+              className="w-full"
+              onClick={() => {
+                setShowSuccessModal(false);
+                trackEvent('success_modal_dismissed');
+              }}
+            >
+              Continue to App
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
